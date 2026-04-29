@@ -10,8 +10,38 @@ A cross-platform QR code scanner built with Rust. Features:
 
 ## Requirements
 
-### For Basic Build (without system tray):
+### Build Requirements:
 - Rust 1.85+ (install via `rustup`)
+
+### Runtime Dependencies (Linux):
+
+**For screen capture:**
+- **GNOME**: `gnome-screenshot` (usually pre-installed)
+- **KDE Plasma**: `spectacle` 
+  ```bash
+  sudo apt-get install kde-spectacle
+  ```
+- **Xfce**: `xfce4-screenshooter`
+  ```bash
+  sudo apt-get install xfce4-screenshooter
+  ```
+- **Sway/Wayland**: `slop` and `grim`
+  ```bash
+  sudo apt-get install slop grim
+  ```
+
+**For clipboard paste:**
+- **X11**: `xclip`
+  ```bash
+  sudo apt-get install xclip
+  ```
+- **Wayland**: `wl-clipboard`
+  ```bash
+  sudo apt-get install wl-clipboard
+  ```
+
+### Runtime Dependencies (macOS):
+- `screencapture` (built-in, no installation needed)
 
 ### For System Tray Support (Linux):
 ```bash
