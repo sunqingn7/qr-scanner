@@ -1,0 +1,17 @@
+[package]
+name = "qr-scanner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.27"
+screenshots = "0.6"
+rqrr = "0.8"
+arboard = "3.3"
+image = "0.25"
+base64 = "0.22"
+rfd = "0.14"
+tray-icon = { version = "0.14", optional = true }
+
+[features]
+system-tray = ["dep:tray-icon"]
