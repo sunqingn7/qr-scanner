@@ -400,13 +400,10 @@ impl eframe::App for QrScannerApp {
         let events = ctx.input(|i| i.events.clone());
         for event in &events {
             match event {
-                egui::Event::Key {
-                    key,
-                    pressed: true,
-                    modifiers,
-                    ..
-                } => {
+                egui::Event::Key { key, pressed: _, modifiers, .. } => {
+                    // Trigger on V with Ctrl, regardless of pressed state (some systems report weirdly)
                     if *key == egui::Key::V && modifiers.ctrl {
+                        eprintln!("Ctrl+V detected in events!");
                         trigger_paste = true;
                     }
                 }
