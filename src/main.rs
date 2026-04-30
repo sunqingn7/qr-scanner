@@ -30,6 +30,7 @@ impl QrScannerApp {
     }
 
     fn capture_screen() -> Option<image::DynamicImage> {
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         let temp_path = "/tmp/qr_scan_capture.png";
 
         // macOS: screencapture (interactive area selection)
@@ -166,6 +167,28 @@ impl QrScannerApp {
             return img;
         }
 
+        // Windows: use screenshots crate
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(screens) = screenshots::Screen::all() {
+                if let Some(screen) = screens.into_iter().next() {
+                    if let Ok(captured) = screen.capture() {
+                        // screenshots returns ImageBuffer<Rgba<u8>, Vec<u8>>
+                        // Convert to project's image type
+                        let width = captured.width();
+                        let height = captured.height();
+                        let raw_data: Vec<u8> = captured.into_raw();
+
+                        if let Some(img_buf) =
+                            image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(width, height, raw_data)
+                        {
+                            return Some(image::DynamicImage::ImageRgba8(img_buf));
+                        }
+                    }
+                }
+            }
+        }
+
         None
     }
 
@@ -279,11 +302,36 @@ impl QrScannerApp {
         if let Ok(mut clipboard) = Clipboard::new() {
             match clipboard.get_image() {
                 Ok(img_data) => {
+                    eprintln!("arboard get_image succeeded: {}x{} ({} bytes)", 
+                              img_data.width, img_data.height, img_data.bytes.len());
                     self.scan_image_data(img_data);
                     return;
                 }
                 Err(e) => {
                     eprintln!("arboard get_image error: {:?}", e);
+                }
+            }
+        }
+
+        // Windows: try PNG format from clipboard
+        #[cfg(target_os = "windows")]
+        {
+            if let Some(img) = Self::read_png_from_clipboard_windows() {
+                match qr_scanner::scan_image(&img) {
+                    Ok(result) => {
+                        self.result_text = result.text.clone();
+                        self.history.push(result.text);
+                        if self.auto_copy {
+                            Self::copy_to_clipboard(&self.result_text);
+                        }
+                        self.debug_info = "QR scanned from clipboard!".to_string();
+                        return;
+                    }
+                    Err(e) => {
+                        self.result_text = format!("No QR code: {}", e);
+                        self.debug_info = format!("No QR found: {}", e);
+                        return;
+                    }
                 }
             }
         }
@@ -317,25 +365,25 @@ impl QrScannerApp {
     fn scan_image_data(&mut self, img_data: ImageData) {
         let width = img_data.width;
         let height = img_data.height;
-        let bytes = if cfg!(target_os = "macos") {
-            // macOS arboard returns BGRA, convert to RGBA for correct colors
-            let mut rgba_bytes = Vec::with_capacity(img_data.bytes.len());
-            let mut i = 0;
-            while i + 3 < img_data.bytes.len() {
-                let b = img_data.bytes[i];
-                let g = img_data.bytes[i + 1];
-                let r = img_data.bytes[i + 2];
-                let a = img_data.bytes[i + 3];
-                rgba_bytes.push(r);
-                rgba_bytes.push(g);
-                rgba_bytes.push(b);
-                rgba_bytes.push(a);
-                i += 4;
-            }
-            rgba_bytes
-        } else {
-            img_data.bytes.to_vec()
-        };
+        
+        // Debug: print first few pixels
+        let sample = img_data.bytes.iter().take(16).collect::<Vec<_>>();
+        eprintln!("Clipboard raw: {}x{}, first bytes: {:02X?}", width, height, sample);
+        
+        // Convert BGRA to RGBA for correct colors
+        let mut bytes = Vec::with_capacity(img_data.bytes.len());
+        let mut i = 0;
+        while i + 3 < img_data.bytes.len() {
+            let b = img_data.bytes[i];
+            let g = img_data.bytes[i + 1];
+            let r = img_data.bytes[i + 2];
+            let a = img_data.bytes[i + 3];
+            bytes.push(r);
+            bytes.push(g);
+            bytes.push(b);
+            bytes.push(a);
+            i += 4;
+        }
 
         self.debug_info = format!("Got image: {}x{}", width, height);
 
@@ -344,6 +392,12 @@ impl QrScannerApp {
             height as u32,
             bytes,
         ) {
+            // Debug: save image to temp file to verify
+            let debug_path = std::env::temp_dir().join("qr_debug_clipboard.png");
+            if img.save(&debug_path).is_ok() {
+                eprintln!("Saved debug image to: {:?}", debug_path);
+            }
+
             let dyn_img = image::DynamicImage::ImageRgba8(img);
             match qr_scanner::scan_image(&dyn_img) {
                 Ok(result) => {
@@ -365,9 +419,229 @@ impl QrScannerApp {
         }
     }
 
-    fn scan_file(&mut self, path: &str) {
+    #[cfg(target_os = "windows")]
+    fn read_png_from_clipboard_windows() -> Option<image::DynamicImage> {
+        eprintln!("Trying clipboard-win to read image...");
+        use clipboard_win::raw::{get_vec, open, close, EnumFormats};
+
+        let mut formats = Vec::new();
+        if open().is_ok() {
+            EnumFormats::new().for_each(|fmt| {
+                formats.push(fmt);
+            });
+            let _ = close();
+            eprintln!("Found {} clipboard formats", formats.len());
+
+            for fmt in formats {
+                if open().is_ok() {
+                    let mut data = Vec::new();
+                    let result = get_vec(fmt, &mut data);
+                    let _ = close();
+                    if result.is_ok() && !data.is_empty() {
+                        eprintln!("Format {}: got {} bytes", fmt, data.len());
+
+                        // Check for PNG
+                        if data.len() > 8 && data[0..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
+                            if let Ok(img) = image::load_from_memory(&data) {
+                                return Some(img);
+                            }
+                        }
+                        // Check for JPEG
+                        if data.len() > 2 && data[0..2] == [0xFF, 0xD8] {
+                            if let Ok(img) = image::load_from_memory(&data) {
+                                return Some(img);
+                            }
+                        }
+                        // Check for BMP
+                        if data.len() > 2 && data[0..2] == [0x42, 0x4D] {
+                            if let Ok(img) = image::load_from_memory(&data) {
+                                return Some(img);
+                            }
+                        }
+                        // Check for SVG text
+                        if let Ok(text) = String::from_utf8(data.clone()) {
+                            let t = text.trim();
+                            let first_200 = text.chars().take(200).collect::<String>();
+                            eprintln!("  Text content (first 200): {:?}", first_200);
+                            
+                            // Check if it's HTML with img src
+                            if t.contains("<html") || t.contains("<img") {
+                                eprintln!("  Detected HTML, trying to extract image URL...");
+                                if let Some(img_url) = Self::extract_img_url_from_html(&text) {
+                                    eprintln!("  Found image URL: {}", img_url);
+                                    // Download the image
+                                    if let Some(img) = Self::download_image_from_url(&img_url) {
+                                        eprintln!("  Downloaded and loaded image!");
+                                        return Some(img);
+                                    }
+                                }
+                            }
+                            
+                            // Also check for plain SVG (only if HTML didn't work)
+                            let is_svg = t.contains("<svg") || 
+                                          t.contains("</svg>") ||
+                                          t.contains("xmlns=") ||
+                                          t.contains("viewBox=");
+                            
+                            eprintln!("  Is SVG detected: {}", is_svg);
+                            
+                            if is_svg {
+                                eprintln!("  Detected SVG text ({} bytes), rasterizing...", data.len());
+                                if let Some(img) = Self::rasterize_svg(&text) {
+                                    return Some(img);
+                                } else {
+                                    eprintln!("  SVG rasterization failed!");
+                                }
+                            }
+                        }
+                        // Try generic image load
+                        if let Ok(img) = image::load_from_memory(&data) {
+                            return Some(img);
+                        }
+                    }
+                } else {
+                    let _ = close();
+                }
+            }
+        } else {
+            eprintln!("Failed to open clipboard");
+        }
+
+        eprintln!("No supported image format found on clipboard");
+        None
+    }
+
+fn rasterize_svg(svg_text: &str) -> Option<image::DynamicImage> {
+        eprintln!("Rasterizing SVG...");
+        let opt = usvg::Options::default();
+        let tree = match usvg::Tree::from_str(svg_text, &opt) {
+            Ok(tree) => tree,
+            Err(e) => {
+                eprintln!("Failed to parse SVG: {:?}", e);
+                return None;
+            }
+        };
+
+        let size = tree.size();
+        let width = size.width().ceil() as u32;
+        let height = size.height().ceil() as u32;
+        eprintln!("SVG size: {}x{}", width, height);
+
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let mut pixmap = tiny_skia::Pixmap::new(width, height)?;
+        
+        // Fill with white background first
+        let white = tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 1.0).unwrap();
+        pixmap.fill(white);
+        
+        // Render SVG on top
+        resvg::render(&tree, tiny_skia::Transform::identity(), &mut pixmap.as_mut());
+
+        let pixels = pixmap.data().to_vec();
+        if let Some(buf) = image::ImageBuffer::from_raw(width, height, pixels) {
+            // Save debug image
+            let debug_path = std::env::temp_dir().join("qr_rasterized.png");
+            let _ = buf.save(&debug_path);
+            eprintln!("Saved rasterized SVG to: {:?}", debug_path);
+            
+            return Some(image::DynamicImage::ImageRgba8(buf));
+        }
+        
+        None
+    }
+
+    #[cfg(target_os = "windows")]
+    fn extract_img_url_from_html(html: &str) -> Option<String> {
+        // Simple extraction - find src="..."
+        if let Some(start) = html.find("src=\"") {
+            let start = start + 5;
+            if let Some(end) = html[start..].find('"') {
+                return Some(html[start..start + end].to_string());
+            }
+        }
+        if let Some(start) = html.find("src='") {
+            let start = start + 5;
+            if let Some(end) = html[start..].find('\'') {
+                return Some(html[start..start + end].to_string());
+            }
+        }
+        None
+    }
+
+#[cfg(target_os = "windows")]
+    fn download_image_from_url(url: &str) -> Option<image::DynamicImage> {
+        eprintln!("Downloading image from URL: {}", url);
+        
+        let temp_path = std::env::temp_dir().join("qr_downloaded.png");
+        
+        // Try PowerShell Invoke-WebRequest
+        let ps_script = format!(
+            "Invoke-WebRequest -Uri '{}' -OutFile '{}' -UseBasicParsing",
+            url,
+            temp_path.display()
+        );
+        
+        let output = std::process::Command::new("powershell")
+            .args(&["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+            .output()
+            .ok()?;
+        
+        if output.status.success() && temp_path.exists() {
+            eprintln!("Downloaded to {:?}", temp_path);
+            
+            // Try to open the image
+            match image::open(&temp_path) {
+                Ok(img) => {
+                    let _ = std::fs::remove_file(&temp_path);
+                    eprintln!("Successfully loaded downloaded image!");
+                    return Some(img);
+                }
+                Err(e) => {
+                    eprintln!("Failed to open downloaded image: {:?}", e);
+                    let _ = std::fs::remove_file(&temp_path);
+                    return None;
+                }
+            }
+        } else {
+            eprintln!("Download failed");
+            None
+        }
+    }
+
+fn scan_file(&mut self, path: &str) {
         self.debug_info = format!("Loading: {}", path);
 
+        let path_lower = path.to_lowercase();
+        
+        // Handle SVG files separately - image crate doesn't support SVG
+        if path_lower.ends_with(".svg") {
+            if let Some(rasterized) = Self::rasterize_svg_from_file(path) {
+                match qr_scanner::scan_image(&rasterized) {
+                    Ok(result) => {
+                        self.result_text = result.text.clone();
+                        self.history.push(result.text);
+                        if self.auto_copy {
+                            Self::copy_to_clipboard(&self.result_text);
+                        }
+                        self.debug_info = "QR code scanned from SVG file!".to_string();
+                        return;
+                    }
+                    Err(e) => {
+                        self.result_text = format!("No QR code found: {}", e);
+                        self.debug_info = format!("Scan failed: {}", e);
+                        return;
+                    }
+                }
+            }
+            self.result_text = "Failed to parse SVG".to_string();
+            self.debug_info = "Error: could not parse SVG file".to_string();
+            return;
+        }
+        
+        // Try to open as regular image
         match image::open(path) {
             Ok(dyn_img) => {
                 match qr_scanner::scan_image(&dyn_img) {
@@ -386,10 +660,16 @@ impl QrScannerApp {
                 }
             }
             Err(e) => {
-                self.result_text = format!("Failed to open image: {}", e);
+                self.result_text = format!("Failed to open image: {}", path);
                 self.debug_info = format!("Error: {}", e);
             }
         }
+    }
+
+    fn rasterize_svg_from_file(path: &str) -> Option<image::DynamicImage> {
+        eprintln!("Rasterizing SVG from file: {}", path);
+        let svg_text = std::fs::read_to_string(path).ok()?;
+        Self::rasterize_svg(&svg_text)
     }
 }
 
@@ -459,7 +739,7 @@ impl eframe::App for QrScannerApp {
             ui.collapsing("Or open file", |ui| {
                 if ui.button("Open File...").clicked() {
                     if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Images", &["png", "jpg", "jpeg", "gif", "bmp", "webp"])
+                        .add_filter("Images", &["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"])
                         .pick_file()
                     {
                         self.scan_file(path.to_str().unwrap());
