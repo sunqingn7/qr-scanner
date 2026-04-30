@@ -8,7 +8,6 @@ repository = "https://github.com/sunqingn7/qr-scanner"
 
 [dependencies]
 eframe = "0.31"
-screenshots = "0.8"
 rqrr = "0.10"
 arboard = "3.3"
 image = "0.25"
