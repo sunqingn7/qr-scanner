@@ -174,6 +174,9 @@ impl QrScannerApp {
         {
             return desktop_cropper::start_snapshot_cropper();
         }
+
+        // All screenshot tools failed
+        None
     }
 
     fn start_scan(&mut self) {
