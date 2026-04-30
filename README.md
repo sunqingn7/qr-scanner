@@ -83,11 +83,11 @@ cargo build --release --features system-tray
 
 ## Dependencies
 
-- `eframe` (0.27) - GUI framework (egui)
-- `screenshots` (0.6) - Screen capture
+- `eframe` (0.31) - GUI framework (egui)
+- `screenshots` (0.8) - Screen capture (uses libwayshot for Wayland)
 - `rqrr` (0.8) - QR code decoding
 - `arboard` (3.3) - Clipboard access
 - `image` (0.25) - Image processing
 - `base64` (0.22) - Base64 encoding/decoding for clipboard images
-- `rfd` (0.14) - Native file dialogs
+- `rfd` (0.15) - Native file dialogs
 - `tray-icon` (0.14) - System tray (optional feature, enabled with `system-tray` feature flag)
