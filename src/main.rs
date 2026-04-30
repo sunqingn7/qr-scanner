@@ -1,4 +1,5 @@
 mod qr_scanner;
+#[cfg(target_os = "linux")]
 mod overlay;
 
 use arboard::{Clipboard, ImageData};
@@ -29,177 +30,191 @@ impl QrScannerApp {
     }
 
     fn capture_screen() -> Option<image::DynamicImage> {
-    let temp_path = "/tmp/qr_scan_capture.png";
-    
-    // Linux: GNOME (area selection)
-    if std::process::Command::new("gnome-screenshot")
-        .arg("-a")
-        .arg("-f")
-        .arg(temp_path)
-        .output()
-        .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
-        .unwrap_or(false)
-    {
-        let img = image::open(temp_path).ok();
-        let _ = std::fs::remove_file(temp_path);
-        return img;
-    }
-    
-    // Linux: KDE Plasma (area selection)
-    if std::process::Command::new("spectacle")
-        .arg("-b")
-        .arg("-o")
-        .arg(temp_path)
-        .output()
-        .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
-        .unwrap_or(false)
-    {
-        let img = image::open(temp_path).ok();
-        let _ = std::fs::remove_file(temp_path);
-        return img;
-    }
-    
-    // Linux: Xfce
-    if std::process::Command::new("xfce4-screenshooter")
-        .arg("-r")
-        .arg("-s")
-        .arg(temp_path)
-        .output()
-        .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
-        .unwrap_or(false)
-    {
-        let img = image::open(temp_path).ok();
-        let _ = std::fs::remove_file(temp_path);
-        return img;
-    }
-    
-    // Linux: Sway/Wayland with grim + slop
-    if let Ok(slop_out) = std::process::Command::new("slop").output() {
-        if slop_out.status.success() {
-            let geom = String::from_utf8_lossy(&slop_out.stdout);
-            let parts: Vec<&str> = geom.split_whitespace().collect();
-            if parts.len() >= 4 {
-                let x = parts[0];
-                let y = parts[1];
-                let w = parts[2];
-                let h = parts[3];
-                
-                if std::process::Command::new("grim")
-                    .arg("-g")
-                    .arg(format!("{} {}x{}", format!("{},{}", x, y), w, h))
-                    .arg(temp_path)
-                    .output()
-                    .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
-                    .unwrap_or(false)
-                {
-                    let img = image::open(temp_path).ok();
-                    let _ = std::fs::remove_file(temp_path);
-                    return img;
-                }
-            }
-        }
-    }
-    
-    // macOS: screencapture (interactive)
-    #[cfg(target_os = "macos")]
-    if std::process::Command::new("screencapture")
-        .arg("-i")
-        .arg(temp_path)
-        .output()
-        .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
-        .unwrap_or(false)
-    {
-        let img = image::open(temp_path).ok();
-        let _ = std::fs::remove_file(temp_path);
-        return img;
-    }
-    
-    // Fallback: full screen gnome-screenshot
-    if std::process::Command::new("gnome-screenshot")
-        .arg("-f")
-        .arg(temp_path)
-        .output()
-        .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
-        .unwrap_or(false)
-    {
-        let img = image::open(temp_path).ok();
-        let _ = std::fs::remove_file(temp_path);
-        return img;
-    }
-    
-    // Fallback: scrot
-    if std::process::Command::new("scrot")
-        .arg(temp_path)
-        .output()
-        .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
-        .unwrap_or(false)
-    {
-        let img = image::open(temp_path).ok();
-        let _ = std::fs::remove_file(temp_path);
-        return img;
-    }
-    
-    // macOS fallback
-    #[cfg(target_os = "macos")]
-    if std::process::Command::new("screencapture")
-        .arg(temp_path)
-        .output()
-        .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
-        .unwrap_or(false)
-    {
-        let img = image::open(temp_path).ok();
-        let _ = std::fs::remove_file(temp_path);
-        return img;
-    }
-    
-    None
-}
+        let temp_path = "/tmp/qr_scan_capture.png";
 
-fn start_scan(&mut self) {
-        self.debug_info = "Taking screenshot...".to_string();
-    
-        match Self::capture_screen() {
-        Some(img) => {
-            match qr_scanner::scan_image(&img) {
-                Ok(result) => {
-                    self.result_text = result.text.clone();
-                    self.history.push(result.text);
-                    if self.auto_copy {
-                        Self::copy_to_clipboard(&self.result_text);
+        // macOS: screencapture (interactive area selection)
+        // Must use .status() not .output() - screencapture -i is interactive
+        // and .output() captures stdout/stderr which deadlocks on macOS
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::fs::remove_file(temp_path);
+            if std::process::Command::new("screencapture")
+                .arg("-i")
+                .arg(temp_path)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+                && std::path::Path::new(temp_path).exists()
+            {
+                let img = image::open(temp_path).ok();
+                let _ = std::fs::remove_file(temp_path);
+                return img;
+            }
+
+            // macOS fallback: full screen capture
+            let _ = std::fs::remove_file(temp_path);
+            if std::process::Command::new("screencapture")
+                .arg(temp_path)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false)
+                && std::path::Path::new(temp_path).exists()
+            {
+                let img = image::open(temp_path).ok();
+                let _ = std::fs::remove_file(temp_path);
+                return img;
+            }
+        }
+
+        // Linux: GNOME (area selection)
+        #[cfg(target_os = "linux")]
+        if std::process::Command::new("gnome-screenshot")
+            .arg("-a")
+            .arg("-f")
+            .arg(temp_path)
+            .output()
+            .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
+            .unwrap_or(false)
+        {
+            let img = image::open(temp_path).ok();
+            let _ = std::fs::remove_file(temp_path);
+            return img;
+        }
+
+        // Linux: KDE Plasma (area selection)
+        #[cfg(target_os = "linux")]
+        if std::process::Command::new("spectacle")
+            .arg("-b")
+            .arg("-o")
+            .arg(temp_path)
+            .output()
+            .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
+            .unwrap_or(false)
+        {
+            let img = image::open(temp_path).ok();
+            let _ = std::fs::remove_file(temp_path);
+            return img;
+        }
+
+        // Linux: Xfce
+        #[cfg(target_os = "linux")]
+        if std::process::Command::new("xfce4-screenshooter")
+            .arg("-r")
+            .arg("-s")
+            .arg(temp_path)
+            .output()
+            .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
+            .unwrap_or(false)
+        {
+            let img = image::open(temp_path).ok();
+            let _ = std::fs::remove_file(temp_path);
+            return img;
+        }
+
+        // Linux: Sway/Wayland with grim + slop
+        #[cfg(target_os = "linux")]
+        if let Ok(slop_out) = std::process::Command::new("slop").output() {
+            if slop_out.status.success() {
+                let geom = String::from_utf8_lossy(&slop_out.stdout);
+                let parts: Vec<&str> = geom.split_whitespace().collect();
+                if parts.len() >= 4 {
+                    let x = parts[0];
+                    let y = parts[1];
+                    let w = parts[2];
+                    let h = parts[3];
+
+                    if std::process::Command::new("grim")
+                        .arg("-g")
+                        .arg(format!("{} {}x{}", format!("{},{}", x, y), w, h))
+                        .arg(temp_path)
+                        .output()
+                        .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
+                        .unwrap_or(false)
+                    {
+                        let img = image::open(temp_path).ok();
+                        let _ = std::fs::remove_file(temp_path);
+                        return img;
                     }
-                    self.debug_info = "QR scanned from screenshot!".to_string();
-                }
-                Err(e) => {
-                    self.debug_info = format!("No QR found in screenshot: {}. Try 'Open File' to select a specific area.", e);
                 }
             }
         }
-        None => {
-            self.debug_info = "Screenshot not supported. Use 'Paste Image' or 'Open File'.".to_string();
+
+        // Linux fallback: full screen gnome-screenshot
+        #[cfg(target_os = "linux")]
+        if std::process::Command::new("gnome-screenshot")
+            .arg("-f")
+            .arg(temp_path)
+            .output()
+            .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
+            .unwrap_or(false)
+        {
+            let img = image::open(temp_path).ok();
+            let _ = std::fs::remove_file(temp_path);
+            return img;
+        }
+
+        // Linux fallback: scrot
+        #[cfg(target_os = "linux")]
+        if std::process::Command::new("scrot")
+            .arg(temp_path)
+            .output()
+            .map(|o| o.status.success() && std::path::Path::new(temp_path).exists())
+            .unwrap_or(false)
+        {
+            let img = image::open(temp_path).ok();
+            let _ = std::fs::remove_file(temp_path);
+            return img;
+        }
+
+        None
+    }
+
+    fn start_scan(&mut self) {
+        self.debug_info = "Taking screenshot...".to_string();
+
+        match Self::capture_screen() {
+            Some(img) => {
+                match qr_scanner::scan_image(&img) {
+                    Ok(result) => {
+                        self.result_text = result.text.clone();
+                        self.history.push(result.text);
+                        if self.auto_copy {
+                            Self::copy_to_clipboard(&self.result_text);
+                        }
+                        self.debug_info = "QR scanned from screenshot!".to_string();
+                    }
+                    Err(e) => {
+                        self.debug_info = format!(
+                            "No QR found in screenshot: {}. Try 'Open File'.",
+                            e
+                        );
+                    }
+                }
+            }
+            None => {
+                self.debug_info =
+                    "Screenshot not supported. Use 'Paste Image' or 'Open File'."
+                        .to_string();
+            }
         }
     }
-}
 
     fn paste_from_clipboard(&mut self) {
-        eprintln!("=== paste_from_clipboard called! ===");
-        self.debug_info = "Step 1: Starting clipboard check...".to_string();
-        
-        // Always print to stderr so we can see it
-        eprintln!("Step 1: Starting clipboard check...");
-        
-        // Try using command line tools as fallback for Linux
+        self.debug_info = "Checking clipboard...".to_string();
+
         #[cfg(target_os = "linux")]
         {
-            // Try xclip for X11 or wl-paste for Wayland
+            // Try xclip for X11
             if let Ok(output) = std::process::Command::new("sh")
                 .arg("-c")
                 .arg("xclip -selection clipboard -t image/png -o 2>/dev/null | base64")
                 .output()
             {
                 if !output.stdout.is_empty() {
-                    // Decode base64 PNG
-                    if let Ok(png_data) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &output.stdout) {
-                        // Try loading as PNG
+                    if let Ok(png_data) = base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &output.stdout,
+                    ) {
                         if let Ok(img) = image::load_from_memory(&png_data) {
                             self.debug_info = "Loaded image via xclip!".to_string();
                             match qr_scanner::scan_image(&img) {
@@ -209,7 +224,8 @@ fn start_scan(&mut self) {
                                     if self.auto_copy {
                                         Self::copy_to_clipboard(&self.result_text);
                                     }
-                                    self.debug_info = "QR scanned from clipboard!".to_string();
+                                    self.debug_info =
+                                        "QR scanned from clipboard!".to_string();
                                     return;
                                 }
                                 Err(e) => {
@@ -222,7 +238,7 @@ fn start_scan(&mut self) {
                     }
                 }
             }
-            
+
             // Try wl-paste for Wayland
             if let Ok(output) = std::process::Command::new("sh")
                 .arg("-c")
@@ -230,7 +246,10 @@ fn start_scan(&mut self) {
                 .output()
             {
                 if !output.stdout.is_empty() {
-                    if let Ok(png_data) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &output.stdout) {
+                    if let Ok(png_data) = base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &output.stdout,
+                    ) {
                         if let Ok(img) = image::load_from_memory(&png_data) {
                             self.debug_info = "Loaded image via wl-paste!".to_string();
                             match qr_scanner::scan_image(&img) {
@@ -240,7 +259,8 @@ fn start_scan(&mut self) {
                                     if self.auto_copy {
                                         Self::copy_to_clipboard(&self.result_text);
                                     }
-                                    self.debug_info = "QR scanned from clipboard!".to_string();
+                                    self.debug_info =
+                                        "QR scanned from clipboard!".to_string();
                                     return;
                                 }
                                 Err(e) => {
@@ -254,8 +274,8 @@ fn start_scan(&mut self) {
                 }
             }
         }
-        
-        // Fallback to arboard
+
+        // Cross-platform: arboard clipboard
         if let Ok(mut clipboard) = Clipboard::new() {
             match clipboard.get_image() {
                 Ok(img_data) => {
@@ -267,27 +287,59 @@ fn start_scan(&mut self) {
                 }
             }
         }
-        
-        // Check if it's X11 or Wayland and use appropriate tool
-        if std::env::var("WAYLAND_DISPLAY").is_ok() {
-            self.debug_info = "Wayland detected. Try: Right-click → 'Copy Image', then Ctrl+V \
-or use 'Open File' to save image first.".to_string();
-        } else if std::env::var("DISPLAY").is_ok() {
-            self.debug_info = "X11 detected. Make sure xclip is installed: sudo apt install xclip".to_string();
-        } else {
-            self.debug_info = "No image in clipboard. Use 'Open File' button instead.".to_string();
+
+        #[cfg(target_os = "macos")]
+        {
+            self.debug_info =
+                "No image in clipboard. Copy an image (Cmd+C in browser) then paste."
+                    .to_string();
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if std::env::var("WAYLAND_DISPLAY").is_ok() {
+                self.debug_info = "Wayland: Right-click → 'Copy Image', then Ctrl+V \
+                     or use 'Open File'."
+                    .to_string();
+            } else if std::env::var("DISPLAY").is_ok() {
+                self.debug_info =
+                    "X11: Make sure xclip is installed: sudo apt install xclip"
+                        .to_string();
+            } else {
+                self.debug_info = "No image in clipboard. Use 'Open File'.".to_string();
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            self.debug_info = "No image in clipboard. Use 'Open File'.".to_string();
         }
     }
 
     fn scan_image_data(&mut self, img_data: ImageData) {
         let width = img_data.width;
         let height = img_data.height;
-        let bytes = img_data.bytes.to_vec();
-        
+        let mut bytes = img_data.bytes.to_vec();
+
         self.debug_info = format!("Got image: {}x{}", width, height);
-        
-        // Try to create image buffer - the bytes might be BGRA or RGBA
-        // arboard returns RGBA on most systems
+
+        // macOS arboard returns BGRA, convert to RGBA for correct colors
+        #[cfg(target_os = "macos")]
+        {
+            let mut rgba_bytes = Vec::with_capacity(bytes.len());
+            let mut i = 0;
+            while i + 3 < bytes.len() {
+                let b = bytes[i];
+                let g = bytes[i + 1];
+                let r = bytes[i + 2];
+                let a = bytes[i + 3];
+                rgba_bytes.push(r);
+                rgba_bytes.push(g);
+                rgba_bytes.push(b);
+                rgba_bytes.push(a);
+                i += 4;
+            }
+            bytes = rgba_bytes;
+        }
+
         if let Some(img) = ImageBuffer::<image::Rgba<u8>, _>::from_raw(
             width as u32,
             height as u32,
@@ -316,7 +368,7 @@ or use 'Open File' to save image first.".to_string();
 
     fn scan_file(&mut self, path: &str) {
         self.debug_info = format!("Loading: {}", path);
-        
+
         match image::open(path) {
             Ok(dyn_img) => {
                 match qr_scanner::scan_image(&dyn_img) {
@@ -344,49 +396,39 @@ or use 'Open File' to save image first.".to_string();
 
 impl eframe::App for QrScannerApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Debug: log events when Ctrl+V is detected
-        let events = ctx.input(|i| i.events.clone());
-        for event in &events {
-            if let egui::Event::Key { key, modifiers, .. } = event {
-                if *key == egui::Key::V && modifiers.ctrl {
-                    eprintln!("Ctrl+V detected in events!");
-                }
-            }
-        }
-
-        // Handle Ctrl+V - check raw events
-        // Note: some systems report V key with pressed=false even on keydown
         let mut trigger_paste = false;
+
         let events = ctx.input(|i| i.events.clone());
         for event in &events {
             match event {
-                egui::Event::Key { key, pressed, modifiers, .. } => {
-                    // Trigger on V with Ctrl, regardless of pressed state (some systems report weirdly)
+                egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } => {
                     if *key == egui::Key::V && modifiers.ctrl {
-                        eprintln!("V key event detected with Ctrl, triggered!");
                         trigger_paste = true;
                     }
                 }
                 egui::Event::Paste(_) => {
-                    eprintln!("Paste event detected!");
                     trigger_paste = true;
                 }
                 _ => {}
             }
         }
-        
+
         if trigger_paste {
-            self.debug_info = "Ctrl+V pressed! Checking clipboard...".to_string();
             self.paste_from_clipboard();
         }
 
-// Main UI
+        // Main UI
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.heading("QR Scanner");
             ui.separator();
 
             ui.horizontal(|ui| {
-                if ui.button("📷 Scan QR (drag selection)").clicked() {
+                if ui.button("Scan QR (area selection)").clicked() {
                     self.start_scan();
                 }
                 ui.checkbox(&mut self.auto_copy, "Auto-copy");
@@ -410,11 +452,11 @@ impl eframe::App for QrScannerApp {
 
             ui.label("Paste from clipboard:");
             ui.horizontal(|ui| {
-                if ui.button("📋 Paste Image (Ctrl+V)").clicked() {
+                if ui.button("Paste Image (Ctrl+V)").clicked() {
                     self.paste_from_clipboard();
                 }
             });
-            ui.label("In browser: right-click image → Copy Image");
+            ui.label("In browser: right-click image -> Copy Image");
 
             ui.separator();
 
@@ -442,7 +484,7 @@ impl eframe::App for QrScannerApp {
                                 item.clone()
                             };
                             ui.monospace(display);
-                            if ui.button("📋").clicked() {
+                            if ui.button("Copy").clicked() {
                                 Self::copy_to_clipboard(item);
                             }
                         });
@@ -456,12 +498,10 @@ impl eframe::App for QrScannerApp {
             });
 
             ui.separator();
-            
+
             ui.label("Debug:");
             ui.monospace(&self.debug_info);
         });
-
-        ctx.request_repaint();
     }
 }
 
@@ -476,7 +516,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eframe::run_native(
         "QR Scanner",
         native_options,
-        Box::new(|_cc| Box::new(QrScannerApp::new())),
+        Box::new(|_cc| Ok(Box::new(QrScannerApp::new()))),
     )?;
 
     Ok(())

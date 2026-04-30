@@ -12,7 +12,7 @@ pub enum OverlayResult {
 pub fn run_overlay() -> OverlayResult {
     eprintln!("run_overlay: starting...");
     let (tx, rx) = mpsc::channel();
-    
+
     std::thread::spawn(move || {
         let result = run_overlay_impl();
         let _ = tx.send(result);
@@ -60,7 +60,7 @@ fn run_overlay_impl() -> OverlayResult {
     impl eframe::App for OverlayApp {
         fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
             let screen_rect = ctx.screen_rect();
-            
+
             let painter = ctx.layer_painter(egui::LayerId::background());
             painter.rect_filled(screen_rect, 0.0, egui::Color32::from_rgba_premultiplied(0, 0, 0, 150));
 
@@ -88,13 +88,13 @@ fn run_overlay_impl() -> OverlayResult {
 
             if state.dragging && input.pointer.any_released() {
                 state.dragging = false;
-                
+
                 if let (Some(start), Some(end)) = (state.start, state.end) {
                     let rect = egui::Rect::from_two_pos(start, end);
-                    
+
                     if rect.width() > 20.0 && rect.height() > 20.0 {
                         eprintln!("Selection made: {:?}", rect);
-                        
+
                         let x = (rect.min.x - self.min_x as f32) as i32;
                         let y = (rect.min.y - self.min_y as f32) as i32;
                         let w = rect.width() as u32;
@@ -115,12 +115,9 @@ fn run_overlay_impl() -> OverlayResult {
                                 if capture_w > 0 && capture_h > 0 {
                                     match screen.capture_area(capture_x, capture_y, capture_w, capture_h) {
                                         Ok(img) => {
-                                            let rgba = img.rgba().clone();
-                                            if let Some(buf) = image::ImageBuffer::from_raw(img.width(), img.height(), rgba) {
-                                                let dyn_img = DynamicImage::ImageRgba8(buf);
-                                                *self.result.lock().unwrap() = Some(OverlayResult::SelectedImage(dyn_img));
-                                                eprintln!("Image captured!");
-                                            }
+                                            let dyn_img = DynamicImage::ImageRgba8(img);
+                                            *self.result.lock().unwrap() = Some(OverlayResult::SelectedImage(dyn_img));
+                                            eprintln!("Image captured!");
                                         }
                                         Err(e) => {
                                             *self.result.lock().unwrap() = Some(OverlayResult::Error(format!("Capture failed: {}", e)));
@@ -132,7 +129,7 @@ fn run_overlay_impl() -> OverlayResult {
                         }
                     }
                 }
-                
+
                 ctx.data_mut(|d| d.remove_temp::<SelectionState>(egui::Id::new("selection")));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 return;
@@ -180,8 +177,8 @@ fn run_overlay_impl() -> OverlayResult {
     };
 
     eprintln!("Starting overlay with run_native...");
-    
-    let _ = eframe::run_native("QR Selection", native_options, Box::new(|_cc| Box::new(app)));
+
+    let _ = eframe::run_native("QR Selection", native_options, Box::new(|_cc| Ok(Box::new(app))));
 
     eprintln!("Overlay window closed");
 
