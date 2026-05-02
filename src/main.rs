@@ -188,6 +188,8 @@ impl QrScannerApp {
     }
 
     fn capture_screen() -> Option<image::DynamicImage> {
+        let temp_path = "/tmp/qr_scan_capture.png";
+        
         // macOS: screencapture (interactive area selection)
         #[cfg(target_os = "macos")]
         {
@@ -195,7 +197,6 @@ impl QrScannerApp {
 
             // Try interactive capture to file
             eprintln!("Trying screencapture -i to file...");
-            let temp_path = "/tmp/qr_scan_capture.png";
             let _ = std::fs::remove_file(temp_path);
             
             let status = Command::new("screencapture")
