@@ -23,7 +23,11 @@ pub fn start_snapshot_cropper() -> Option<DynamicImage> {
         // Read image from clipboard
         let mut clipboard = Clipboard::new().ok()?;
         if let Ok(data) = clipboard.get_image() {
+            eprintln!("desktop_cropper: got image {}x{} ({} bytes)", data.width, data.height, data.bytes.len());
             if data.width > 0 && data.height > 0 {
+                // Debug: save image before conversion
+                let debug_path = std::env::temp_dir().join("qr_clipped_raw.png");
+                
                 // Convert BGRA to RGBA
                 let mut rgba_data: Vec<u8> = Vec::with_capacity(data.bytes.len());
                 let bytes = data.bytes.as_ref();
@@ -41,8 +45,17 @@ pub fn start_snapshot_cropper() -> Option<DynamicImage> {
                     data.height as u32,
                     rgba_data,
                 )?;
-                return Some(DynamicImage::ImageRgba8(buf));
+                
+                // Save debug image
+                let dyn_img = DynamicImage::ImageRgba8(buf);
+                if dyn_img.save(&debug_path).is_ok() {
+                    eprintln!("desktop_cropper: saved debug to {:?}", debug_path);
+                }
+                
+                return Some(dyn_img);
             }
+        } else {
+            eprintln!("desktop_cropper: get_image failed");
         }
         None
     }
