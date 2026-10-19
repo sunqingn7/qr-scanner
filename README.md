@@ -6,7 +6,7 @@ A cross-platform QR code scanner built with Rust. Features:
 - **Image Paste**: Copy an image (right-click "Copy Image" on web) and paste it for QR extraction
 - **Clipboard Integration**: Scan results are automatically copied to clipboard
 - **History**: Keeps track of recent scans
-- **System Tray** (optional): Run from system tray with double-click to scan
+- **System Tray**: *not yet implemented* (the optional `system-tray` feature is a placeholder)
 
 ## Requirements
 
@@ -58,10 +58,12 @@ No additional dependencies needed - builds out of the box.
 cargo build --release
 ```
 
-### With System Tray:
+### With System Tray (experimental placeholder):
 ```bash
 cargo build --release --features system-tray
 ```
+> Note: tray support is not implemented yet; the feature flag currently pulls in
+> `tray-icon` but the app behaves identically without it.
 
 ## Usage
 
@@ -84,10 +86,13 @@ cargo build --release --features system-tray
 ## Dependencies
 
 - `eframe` (0.31) - GUI framework (egui)
-- `screenshots` (0.8) - Screen capture (uses libwayshot for Wayland)
-- `rqrr` (0.8) - QR code decoding
+- `rqrr` (0.10) - QR code decoding
 - `arboard` (3.3) - Clipboard access
 - `image` (0.25) - Image processing
-- `base64` (0.22) - Base64 encoding/decoding for clipboard images
+- `tempfile` (3) - Private temp dirs for screen capture / downloads
 - `rfd` (0.15) - Native file dialogs
-- `tray-icon` (0.14) - System tray (optional feature, enabled with `system-tray` feature flag)
+- `tray-icon` (0.14) - Optional feature flag only (tray not implemented yet)
+
+External tools used at runtime (see *Runtime Dependencies* above): `screencapture`,
+`gnome-screenshot`, `spectacle`, `xfce4-screenshooter`, `slop` + `grim`, `scrot`,
+`xclip` / `wl-paste`, `curl` (or PowerShell on Windows).

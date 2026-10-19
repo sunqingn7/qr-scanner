@@ -3522,7 +3522,6 @@ name = "qr-scanner"
 version = "0.2.0"
 dependencies = [
  "arboard",
- "base64",
  "clipboard-win",
  "eframe",
  "image",
