@@ -12,6 +12,7 @@ rqrr = "0.10"
 arboard = "3.3"
 image = "0.25"
 rfd = "0.15"
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 tempfile = "3"
 tray-icon = { version = "0.14", optional = true }
 usvg = "0.44"
@@ -22,7 +23,6 @@ tiny-skia = "0.11"
 clipboard-win = "5.3"
 
 [dev-dependencies]
-qrcode = "0.14"
 
 [features]
 system-tray = ["dep:tray-icon"]

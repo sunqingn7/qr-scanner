@@ -6,6 +6,7 @@ A cross-platform QR code scanner built with Rust. Features:
 - **Image Paste**: Copy an image (right-click "Copy Image" on web) and paste it for QR extraction
 - **Clipboard Integration**: Scan results are automatically copied to clipboard
 - **History**: Keeps track of recent scans
+- **QR Generation**: Type any text or URL, click "Generate", preview the QR code, then save it as PNG/SVG or copy it to the clipboard
 - **System Tray**: *not yet implemented* (the optional `system-tray` feature is a placeholder)
 
 ## Requirements

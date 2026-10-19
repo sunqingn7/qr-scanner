@@ -220,9 +220,57 @@ pub fn extract_img_url_from_html(html: &str) -> Option<String> {
     None
 }
 
+/// Encode `text` into a QR code rendered as a crisp black-on-white RGBA
+/// image. `module_size` is the pixel size of one QR module; a 4-module
+/// quiet zone (per spec) is added. Error correction level M.
+pub fn generate_qr_image(text: &str, module_size: u32) -> Option<image::DynamicImage> {
+    let code = qrcode::QrCode::with_error_correction_level(
+        text.as_bytes(),
+        qrcode::EcLevel::M,
+    )
+    .ok()?;
+    let modules = code.width() as u32;
+    let quiet = 4u32;
+    let dim = (modules + 2 * quiet) * module_size;
+    let mut img = image::ImageBuffer::<image::Rgba<u8>, _>::from_pixel(
+        dim,
+        dim,
+        image::Rgba([255, 255, 255, 255]),
+    );
+    for my in 0..modules {
+        for mx in 0..modules {
+            if code[(mx as usize, my as usize)] == qrcode::Color::Dark {
+                let x0 = (mx + quiet) * module_size;
+                let y0 = (my + quiet) * module_size;
+                for dy in 0..module_size {
+                    for dx in 0..module_size {
+                        img.put_pixel(x0 + dx, y0 + dy, image::Rgba([0, 0, 0, 255]));
+                    }
+                }
+            }
+        }
+    }
+    Some(image::DynamicImage::ImageRgba8(img))
+}
+
+/// Encode `text` into a scalable SVG QR string (returns None if the text
+/// exceeds QR capacity).
+pub fn generate_qr_svg(text: &str) -> Option<String> {
+    let code = qrcode::QrCode::with_error_correction_level(
+        text.as_bytes(),
+        qrcode::EcLevel::M,
+    )
+    .ok()?;
+    Some(
+        code.render::<qrcode::render::svg::Color>()
+            .min_dimensions(256, 256)
+            .build(),
+    )
+}
+
 /// Only http(s) URLs are safe to hand to curl/PowerShell: this blocks `file://`
 /// reads, `javascript:` junk, and arguments/whitespace being injected as URL.
-pub fn is_safe_http_url(url: &str) -> bool {
+fn is_safe_http_url(url: &str) -> bool {
     let u = url.trim();
     !u.is_empty() && !u.chars().any(char::is_whitespace) && {
         let lower = u.to_ascii_lowercase();
@@ -453,6 +501,20 @@ struct QrScannerApp {
     /// True while a background capture/scan job is running; UI triggers are
     /// disabled and ignored until it finishes.
     busy: bool,
+    // ---- QR generation ----
+    /// Text the user typed to encode.
+    gen_input: String,
+    /// Text actually encoded by the displayed QR (saved files use this, not
+    /// the possibly-edited `gen_input`).
+    gen_text: String,
+    gen_image: Option<image::DynamicImage>,
+    gen_svg: Option<String>,
+    gen_texture: Option<egui::TextureHandle>,
+    gen_status: String,
+    /// True while a text-edit widget holds keyboard focus (previous frame);
+    /// suppresses the global paste shortcut so Cmd+V types into the field
+    /// instead of triggering a clipboard scan.
+    text_edit_focused: bool,
 }
 
 impl QrScannerApp {
@@ -467,6 +529,13 @@ impl QrScannerApp {
             events_tx,
             events_rx,
             busy: false,
+            gen_input: String::new(),
+            gen_text: String::new(),
+            gen_image: None,
+            gen_svg: None,
+            gen_texture: None,
+            gen_status: "No QR code yet. Enter text and click Generate.".to_string(),
+            text_edit_focused: false,
         }
     }
 
@@ -474,6 +543,106 @@ impl QrScannerApp {
         if let Ok(mut clipboard) = Clipboard::new() {
             let _ = clipboard.set_text(text.to_string());
         }
+    }
+
+    /// Encode the input text, build the display texture, and fill the
+    /// image/SVG payloads used by the save/copy buttons.
+    fn generate_qr(&mut self, ctx: &egui::Context) {
+        let text = self.gen_input.trim().to_string();
+        if text.is_empty() {
+            self.gen_status = "Enter text or a URL first.".to_string();
+            self.gen_image = None;
+            self.gen_svg = None;
+            self.gen_texture = None;
+            return;
+        }
+        match (generate_qr_svg(&text), generate_qr_image(&text, 12)) {
+            (Some(svg), Some(img)) => {
+                let rgba = img.to_rgba8();
+                let size = [rgba.width() as usize, rgba.height() as usize];
+                let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                    size,
+                    rgba.as_flat_samples().as_slice(),
+                );
+                // LINEAR filtering: the texture is downsampled for display,
+                // nearest would drop whole modules at non-integer scales.
+                self.gen_texture = Some(ctx.load_texture(
+                    "generated_qr",
+                    color_image,
+                    egui::TextureOptions::LINEAR,
+                ));
+                self.gen_image = Some(img);
+                self.gen_svg = Some(svg);
+                self.gen_text = text;
+                self.gen_status = format!("Generated {}x{} QR.", size[0], size[1]);
+            }
+            _ => {
+                self.gen_status =
+                    "Could not encode: text exceeds QR capacity.".to_string();
+                self.gen_image = None;
+                self.gen_svg = None;
+                self.gen_texture = None;
+            }
+        }
+    }
+
+    fn save_qr_png(&mut self) {
+        let Some(img) = self.gen_image.clone() else {
+            self.gen_status = "Generate a QR code first.".to_string();
+            return;
+        };
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("PNG image", &["png"])
+            .set_file_name("qrcode.png")
+            .save_file()
+        {
+            match img.save(&path) {
+                Ok(()) => self.gen_status = format!("Saved PNG: {}", path.display()),
+                Err(e) => self.gen_status = format!("PNG save failed: {}", e),
+            }
+        }
+    }
+
+    fn save_qr_svg(&mut self) {
+        let Some(svg) = self.gen_svg.clone() else {
+            self.gen_status = "Generate a QR code first.".to_string();
+            return;
+        };
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("SVG image", &["svg"])
+            .set_file_name("qrcode.svg")
+            .save_file()
+        {
+            match std::fs::write(&path, svg) {
+                Ok(()) => self.gen_status = format!("Saved SVG: {}", path.display()),
+                Err(e) => self.gen_status = format!("SVG save failed: {}", e),
+            }
+        }
+    }
+
+    fn copy_qr_image(&mut self) {
+        let Some(img) = &self.gen_image else {
+            self.gen_status = "Generate a QR code first.".to_string();
+            return;
+        };
+        let rgba = img.to_rgba8();
+        let data = ImageData {
+            width: rgba.width() as usize,
+            height: rgba.height() as usize,
+            bytes: std::borrow::Cow::Owned(rgba.into_raw()),
+        };
+        match Clipboard::new().and_then(|mut cb| cb.set_image(data)) {
+            Ok(()) => self.gen_status = "QR image copied to clipboard.".to_string(),
+            Err(e) => self.gen_status = format!("Copy failed: {}", e),
+        }
+    }
+
+    fn clear_generated(&mut self) {
+        self.gen_image = None;
+        self.gen_svg = None;
+        self.gen_texture = None;
+        self.gen_text.clear();
+        self.gen_status = "No QR code yet. Enter text and click Generate.".to_string();
     }
 
     /// Apply one message delivered by a background worker. Kept separate from
@@ -1262,16 +1431,23 @@ impl eframe::App for QrScannerApp {
                 _ => {}
             }
         }
-        if trigger_paste && !self.busy {
+        if trigger_paste && !self.busy && !self.text_edit_focused {
             self.paste_from_clipboard(ctx);
         }
 
+        self.text_edit_focused = false;
+
         // 3. Main UI (all triggers disabled while a job is running).
         egui::CentralPanel::default().show(ctx, |ui| {
+            egui::ScrollArea::vertical()
+                .auto_shrink(egui::Vec2b::new(false, false))
+                .show(ui, |ui| {
             ui.heading("QR Scanner");
+            ui.label(egui::RichText::new("scan \u{00b7} paste \u{00b7} generate").weak().small());
             ui.separator();
 
             ui.add_enabled_ui(!self.busy, |ui| {
+                ui.strong("Scan");
                 ui.horizontal(|ui| {
                     if ui.button("Scan QR (area selection)").clicked() {
                         self.start_scan(ctx);
@@ -1281,8 +1457,9 @@ impl eframe::App for QrScannerApp {
                 ui.label("Windows: uses OS Snipping Tool. macOS/Linux: click and drag to select.");
 
                 ui.separator();
-                ui.label("Result:");
-                ui.text_edit_multiline(&mut self.result_text);
+                ui.strong("Result");
+                let re_result = ui.text_edit_multiline(&mut self.result_text);
+                self.text_edit_focused |= re_result.has_focus();
 
                 ui.horizontal(|ui| {
                     if ui.button("Copy").clicked() {
@@ -1295,7 +1472,7 @@ impl eframe::App for QrScannerApp {
 
                 ui.separator();
 
-                ui.label("Paste from clipboard:");
+                ui.strong("Paste from clipboard");
                 ui.horizontal(|ui| {
                     let paste_label = if cfg!(target_os = "macos") {
                         "Paste Image (Cmd+V)"
@@ -1331,7 +1508,7 @@ impl eframe::App for QrScannerApp {
                 ui.separator();
 
                 ui.collapsing("History", |ui| {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
                         for (i, item) in self.history.iter().enumerate().rev().take(20) {
                             ui.horizontal(|ui| {
                                 ui.label(format!("{}:", self.history.len() - i));
@@ -1352,14 +1529,74 @@ impl eframe::App for QrScannerApp {
             });
 
             ui.separator();
+            ui.strong("Generate QR code");
+            ui.horizontal(|ui| {
+                let text_w = (ui.available_width() - 96.0).max(120.0);
+                let re_gen = ui.add_sized(
+                    [text_w, 24.0],
+                    egui::TextEdit::singleline(&mut self.gen_input)
+                        .hint_text("Text or URL to encode"),
+                );
+                self.text_edit_focused |= re_gen.has_focus();
+                let enter = ui.ctx().input(|i| i.key_pressed(egui::Key::Enter));
+                if ui.button("Generate").clicked() || (re_gen.lost_focus() && enter) {
+                    self.generate_qr(ctx);
+                }
+            });
 
-            ui.label("Debug:");
+            // QR display area (above Debug).
+            ui.group(|ui| {
+                ui.vertical_centered(|ui| {
+                    if let Some(tex) = &self.gen_texture {
+                        ui.add(egui::Image::new((
+                            tex.id(),
+                            egui::vec2(260.0, 260.0),
+                        )));
+                        if !self.gen_text.is_empty() {
+                            ui.label(
+                                egui::RichText::new(truncate_for_display(&self.gen_text, 60))
+                                    .weak()
+                                    .small(),
+                            );
+                        }
+                    } else {
+                        ui.add_sized(
+                            [260.0, 260.0],
+                            egui::Label::new(
+                                "No QR code yet\nEnter text above and click Generate",
+                            )
+                            .wrap(),
+                        );
+                    }
+                });
+            });
+
+            ui.horizontal(|ui| {
+                if ui.button("Save PNG").clicked() {
+                    self.save_qr_png();
+                }
+                if ui.button("Save SVG").clicked() {
+                    self.save_qr_svg();
+                }
+                if ui.button("Copy Image").clicked() {
+                    self.copy_qr_image();
+                }
+                if ui.button("Clear").clicked() {
+                    self.clear_generated();
+                }
+            });
+            ui.label(egui::RichText::new(self.gen_status.clone()).weak());
+
+            ui.separator();
+
+            ui.strong("Debug");
             ui.horizontal(|ui| {
                 if self.busy {
                     ui.spinner();
                 }
                 ui.monospace(&self.debug_info);
             });
+                });
         });
     }
 }
@@ -1367,7 +1604,7 @@ impl eframe::App for QrScannerApp {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([450.0, 550.0])
+            .with_inner_size([500.0, 820.0])
             .with_title("QR Scanner"),
         ..Default::default()
     };
@@ -1827,5 +2064,44 @@ mod tests {
         app.handle_worker_msg(msg);
         assert!(!app.busy, "UI must never stay busy after a worker panic");
         assert!(app.debug_info.contains("panic"));
+    }
+
+    // ---- QR generation tests ----
+
+    #[test]
+    fn test_generate_qr_roundtrip() {
+        let text = "https://generated.example/\u{2713} \u{4e8c}\u{7ef4}\u{7801}";
+        let img = super::generate_qr_image(text, 10).expect("should generate");
+        assert_eq!(img.width(), img.height());
+        let scan = qr_scanner::scan_image(&img).expect("generated QR should decode");
+        assert_eq!(scan.text, text);
+    }
+
+    #[test]
+    fn test_generate_qr_svg_roundtrip() {
+        let text = "svg-gen \u{6d4b}\u{8bd5}";
+        let svg = generate_qr_svg(text).expect("svg");
+        assert!(svg.contains("<svg"));
+        let img = rasterize_svg(&svg).expect("rasterize");
+        let scan = qr_scanner::scan_image(&img).expect("svg QR should decode");
+        assert_eq!(scan.text, text);
+    }
+
+    #[test]
+    fn test_generate_qr_png_file_roundtrip() {
+        let text = "saved-file-123";
+        let img = super::generate_qr_image(text, 12).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("gen.png");
+        img.save(&path).unwrap();
+        let opened = image::open(&path).unwrap();
+        assert_eq!(qr_scanner::scan_image(&opened).unwrap().text, text);
+    }
+
+    #[test]
+    fn test_generate_qr_too_long_fails() {
+        let huge = "x".repeat(5000); // exceeds QR capacity at EC level M
+        assert!(super::generate_qr_image(&huge, 4).is_none());
+        assert!(generate_qr_svg(&huge).is_none());
     }
 }
